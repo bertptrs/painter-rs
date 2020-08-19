@@ -27,6 +27,9 @@ impl Simulator {
 
         let ctx = Context::new(&self.surface);
 
+        // Change transformation to avoid scaling every draw call.
+        ctx.scale(width, height);
+
         // Clear the drawing board with white
         ctx.set_source_rgb(1.0, 1.0, 1.0);
         ctx.paint();
@@ -39,9 +42,10 @@ impl Simulator {
 
             ctx.new_path();
 
-            for (i, [x, y]) in polygon[4..]
+            for (i, (x, y)) in polygon[4..]
                 .chunks_exact(2)
-                .map(|s| [s[0] * width, s[1] * height])
+                // Safety: chunks_exact ensures that this slice is always large enough.
+                .map(|p| unsafe { (*p.get_unchecked(0), *p.get_unchecked(1)) })
                 .enumerate()
             {
                 if i == 0 {
