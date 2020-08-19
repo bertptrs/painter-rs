@@ -1,0 +1,17 @@
+language: rust
+
+# Test with all channels
+rust:
+  - stable
+  - beta
+  - nightly
+
+jobs:
+  allow_failures:
+    - rust: nightly  # Don't care about nightly failures that much.
+  fast_finish: true
+
+addons:
+  apt:
+    packages:
+      - libcairo2-dev
