@@ -1,3 +1,4 @@
+use std::convert::TryInto;
 use std::error::Error;
 use std::io::Write;
 
@@ -9,10 +10,13 @@ pub struct Simulator {
 }
 
 impl Simulator {
+    /// Type of image surface used for comparison and rendering.
+    pub const IMAGE_FORMAT: Format = Format::Rgb24;
+
     pub fn new(sides: usize, width: usize, height: usize) -> Self {
         Self {
             sides,
-            surface: ImageSurface::create(Format::ARgb32, width as i32, height as i32).unwrap(),
+            surface: ImageSurface::create(Self::IMAGE_FORMAT, width as i32, height as i32).unwrap(),
         }
     }
 
@@ -24,11 +28,8 @@ impl Simulator {
         let ctx = Context::new(&self.surface);
 
         // Clear the drawing board with white
-        ctx.new_path();
         ctx.set_source_rgb(1.0, 1.0, 1.0);
-        ctx.rectangle(0.0, 0.0, width, height);
-        ctx.fill();
-        ctx.close_path();
+        ctx.paint();
 
         let polygon_size = self.polygon_size();
 
@@ -54,6 +55,8 @@ impl Simulator {
 
             ctx.close_path();
         }
+
+        self.surface.flush();
     }
 
     pub fn polygon_size(&self) -> usize {
@@ -64,6 +67,68 @@ impl Simulator {
     pub fn write_buffer(&self, dest: &mut impl Write) -> Result<(), Box<dyn Error>> {
         self.surface.write_to_png(dest)?;
         Ok(())
+    }
+
+    /// Compute the absolute difference between images.
+    ///
+    /// This image surface must be of the same type as is used to render the image and should be
+    /// of equal dimensions.
+    ///
+    /// # Panics
+    /// If the supplied `ImageSurface` is not compatible with the surface used, this method will
+    /// panic.
+    pub fn compare(&mut self, to: &mut ImageSurface) -> f64 {
+        // First: sanity checks on the provided image.
+        assert_eq!(
+            to.get_format(),
+            Self::IMAGE_FORMAT,
+            "Image format should match"
+        );
+
+        assert_eq!(
+            to.get_width(),
+            self.surface.get_width(),
+            "Image dimensions should match."
+        );
+
+        assert_eq!(
+            to.get_height(),
+            self.surface.get_height(),
+            "Image dimensions should match."
+        );
+
+        let stride1 = self.surface.get_stride();
+        let stride2 = to.get_stride();
+        let width = to.get_width() as usize;
+
+        let data1 = self.surface.get_data().unwrap();
+        let data2 = to.get_data().unwrap();
+
+        let mut diff = 0.0;
+
+        for (row1, row2) in data1
+            .chunks_exact(stride1 as usize)
+            .zip(data2.chunks_exact(stride2 as usize))
+        {
+            for (p1, p2) in row1.chunks_exact(4).zip(row2.chunks_exact(4)).take(width) {
+                // Load the channels from the byte string.
+                // Cairo uses native endian so this is annoying and we can't directly index.
+                let mut c1 = u32::from_ne_bytes(p1.try_into().unwrap());
+                let mut c2 = u32::from_ne_bytes(p2.try_into().unwrap());
+
+                // Rgb24 uses the lower 24 bits for the channels and the upper 8 are undefined.
+                for _ in 0..3 {
+                    let v1 = c1 & 0xff;
+                    c1 >>= 8;
+                    let v2 = c2 & 0xff;
+                    c2 >>= 8;
+
+                    diff += (v1.max(v2) - v1.min(v2)) as f64;
+                }
+            }
+        }
+
+        diff
     }
 }
 
@@ -97,5 +162,34 @@ mod tests {
 
         // clean up after ourselves
         std::fs::remove_file(&filename).unwrap();
+    }
+
+    #[test]
+    fn compute_difference() {
+        let mut sim = Simulator::new(6, 10, 10);
+        sim.simulate(&[]);
+
+        let mut reference = ImageSurface::create(Simulator::IMAGE_FORMAT, 10, 10).unwrap();
+
+        // Create a blank canvas
+        let ctx = Context::new(&reference);
+        ctx.set_source_rgb(1.0, 1.0, 1.0);
+        ctx.paint();
+        drop(ctx);
+
+        // They should be equal now
+        let difference = sim.compare(&mut reference);
+
+        assert_eq!(0.0, difference);
+
+        // Now paint it blue
+        let ctx = Context::new(&reference);
+        ctx.set_source_rgb(0.0, 0.0, 1.0);
+        ctx.paint();
+        drop(ctx);
+
+        // Difference should be (255 + 255) * 10 * 10
+        let difference = sim.compare(&mut reference);
+        assert_eq!(51000.0, difference);
     }
 }
