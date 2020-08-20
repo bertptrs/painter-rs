@@ -1,8 +1,10 @@
 use std::convert::TryInto;
 use std::error::Error;
-use std::io::Write;
+use std::io::{Read, Write};
 
+use byte_slice_cast::AsSliceOf;
 use cairo::{Context, Format, ImageSurface};
+use rand::distributions::{Distribution, Standard};
 
 pub struct Simulator {
     sides: usize,
@@ -110,15 +112,17 @@ impl Simulator {
 
         let mut diff = 0.0;
 
+        // Future idea: use cairo's OPERATOR_DIFFERENCE to compute the difference and sum the result.
         for (row1, row2) in data1
             .chunks_exact(stride1 as usize)
             .zip(data2.chunks_exact(stride2 as usize))
         {
-            for (p1, p2) in row1.chunks_exact(4).zip(row2.chunks_exact(4)).take(width) {
-                // Load the channels from the byte string.
-                // Cairo uses native endian so this is annoying and we can't directly index.
-                let mut c1 = u32::from_ne_bytes(p1.try_into().unwrap());
-                let mut c2 = u32::from_ne_bytes(p2.try_into().unwrap());
+            // Can be safely unwrapped as cairo ensures alignment.
+            let row1 = row1.as_slice_of::<u32>().unwrap();
+            let row2 = row2.as_slice_of::<u32>().unwrap();
+
+            for pixels in row1.iter().copied().zip(row2.iter().copied()).take(width) {
+                let (mut c1, mut c2) = pixels;
 
                 // Rgb24 uses the lower 24 bits for the channels and the upper 8 are undefined.
                 for _ in 0..3 {
@@ -126,7 +130,6 @@ impl Simulator {
                     c1 >>= 8;
                     let v2 = c2 & 0xff;
                     c2 >>= 8;
-
                     diff += (v1.max(v2) - v1.min(v2)) as f64;
                 }
             }
@@ -136,12 +139,66 @@ impl Simulator {
     }
 }
 
+pub struct Optimizer {
+    target: ImageSurface,
+    sim: Simulator,
+    population: Vec<Vec<f64>>,
+}
+
+impl Optimizer {
+    pub fn new(
+        pop_size: usize,
+        polygon_count: usize,
+        sides: usize,
+        target: &mut impl Read,
+    ) -> Self {
+        // TODO: experiment with other initial distributions and RNG.
+        let dist = Standard;
+        let rng = rand::thread_rng();
+
+        // TODO: better error handling.
+        let target = ImageSurface::create_from_png(target).expect("Failed to read PNG target.");
+        let sim = Simulator::new(
+            sides,
+            target.get_width() as usize,
+            target.get_height() as usize,
+        );
+
+        // Initialize random initial population
+        let population = (0..pop_size)
+            .map(|_| {
+                dist.sample_iter(rng)
+                    .take(sim.polygon_size() * polygon_count)
+                    .collect()
+            })
+            .collect();
+
+        Self {
+            target,
+            sim,
+            population,
+        }
+    }
+
+    pub fn evaluate(&mut self) -> Vec<f64> {
+        // Manual borrows to ensure the checker approves of the lambda.
+        let sim = &mut self.sim;
+        let target = &mut self.target;
+
+        self.population
+            .iter()
+            .map(|instance| {
+                sim.simulate(instance);
+                sim.compare(target)
+            })
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::env::temp_dir;
     use std::fs::File;
-
-    use rand::distributions::{Distribution, Standard};
 
     use super::*;
 
@@ -195,5 +252,16 @@ mod tests {
         // Difference should be (255 + 255) * 10 * 10
         let difference = sim.compare(&mut reference);
         assert_eq!(51000.0, difference);
+    }
+
+    #[test]
+    fn initialize_optimizer() {
+        let mut optimizer = Optimizer::new(
+            10,
+            10,
+            6,
+            &mut include_bytes!("../samples/rustacean-small.png").as_ref(),
+        );
+        optimizer.evaluate();
     }
 }
