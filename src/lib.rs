@@ -1,3 +1,4 @@
+use std::cmp::{Ordering, PartialOrd};
 use std::error::Error;
 use std::io::{Read, Write};
 
@@ -137,12 +138,18 @@ impl Simulator {
 
         diff
     }
+
+    pub fn score(&mut self, data: &[f64], target: &mut ImageSurface) -> f64 {
+        self.simulate(data);
+        self.compare(target)
+    }
 }
 
 pub struct Optimizer {
     target: ImageSurface,
     sim: Simulator,
-    population: Vec<Vec<f64>>,
+    population: Vec<(f64, Vec<f64>)>,
+    offspring_count: usize,
     mutation_chance: Binomial,
     mutation_amount: Normal<f64>,
 }
@@ -159,64 +166,72 @@ impl Optimizer {
         let rng = rand::thread_rng();
 
         // TODO: better error handling.
-        let target = ImageSurface::create_from_png(target).expect("Failed to read PNG target.");
-        let sim = Simulator::new(
+        let mut target = ImageSurface::create_from_png(target).expect("Failed to read PNG target.");
+        let mut sim = Simulator::new(
             sides,
             target.get_width() as usize,
             target.get_height() as usize,
         );
 
         // Initialize random initial population
-        let population = (0..pop_size)
+        let mut population: Vec<_> = (0..pop_size)
             .map(|_| {
-                dist.sample_iter(rng)
+                let dna: Vec<f64> = dist
+                    .sample_iter(rng)
                     .take(sim.polygon_size() * polygon_count)
-                    .collect()
+                    .collect();
+
+                let fitness = sim.score(&dna, &mut target);
+
+                (fitness, dna)
             })
             .collect();
+
+        population.sort_unstable_by(Self::population_compare);
 
         Self {
             target,
             sim,
             population,
             // TODO: tweak
+            offspring_count: pop_size,
             mutation_chance: Binomial::new(1, 0.2).unwrap(),
             mutation_amount: Normal::new(0.0, 0.01).unwrap(),
         }
     }
 
-    fn evaluate(&mut self) -> Vec<f64> {
-        // Manual borrows to ensure the checker approves of the lambda.
-        let sim = &mut self.sim;
-        let target = &mut self.target;
-
-        self.population
-            .iter()
-            .map(|instance| {
-                sim.simulate(instance);
-                sim.compare(target)
-            })
-            .collect()
-    }
-
     pub fn advance(&mut self) {
-        let scores = self.evaluate();
-
-        let parent_distribution = WeightedIndex::new(scores.iter().map(|&s| 1. / s)).unwrap();
+        let parent_distribution =
+            WeightedIndex::new(self.population.iter().map(|s| 1. / s.0)).unwrap();
         let pop_size = self.population.len();
 
-        let new_population = (0..pop_size)
-            .map(|_| self.generate_offspring(&parent_distribution))
+        // Generate new children and add them to the population
+        let new_generation: Vec<_> = (0..self.offspring_count)
+            .map(|_| {
+                let dna = self.generate_offspring(&parent_distribution);
+                let fitness = self.sim.score(&dna, &mut self.target);
+
+                (fitness, dna)
+            })
             .collect();
 
-        self.population = new_population;
+        self.population.extend(new_generation);
+
+        // Make sure the population is sorted again
+        self.population.sort_unstable_by(Self::population_compare);
+
+        // Finally, discard the unfit.
+        self.population.truncate(pop_size);
+
+        // TODO: make elitism (always keeping the best regardless) optional and make the selection
+        // algorithm configurable.
     }
 
     fn generate_offspring(&self, parents: impl Distribution<usize>) -> Vec<f64> {
         let mut rng = rand::thread_rng();
 
-        let parent1 = &self.population[parents.sample(&mut rng)];
-        let parent2 = &self.population[parents.sample(&mut rng)];
+        let parent1 = &self.population[parents.sample(&mut rng)].1;
+        let parent2 = &self.population[parents.sample(&mut rng)].1;
 
         let size = parent1.len();
 
@@ -247,6 +262,15 @@ impl Optimizer {
             .iter_mut()
             .filter(move |_| self.mutation_chance.sample(&mut rng) == 1)
             .for_each(move |n| *n = (*n + self.mutation_amount.sample(&mut rng)).max(0.).min(1.));
+    }
+
+    /// Special comparator to sort by score only.
+    ///
+    /// It also fakes total ordering for the fitness value since floats don't have that. Note: this
+    /// sort assumes that we are minimizing some fitness function. If that's not the case, this
+    /// function should be inverted.
+    fn population_compare<T>(a: &(f64, T), b: &(f64, T)) -> Ordering {
+        a.0.partial_cmp(&b.0).expect("Invalid fitness function")
     }
 }
 
