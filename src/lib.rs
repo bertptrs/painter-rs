@@ -3,7 +3,7 @@ use std::io::{Read, Write};
 
 use byte_slice_cast::AsSliceOf;
 use cairo::{Context, Format, ImageSurface};
-use rand_distr::{weighted::WeightedIndex, Distribution, Standard};
+use rand_distr::{weighted::WeightedIndex, Binomial, Distribution, Normal, Standard};
 
 pub struct Simulator {
     sides: usize,
@@ -74,7 +74,7 @@ impl Simulator {
         Ok(())
     }
 
-    /// Compute the absolute difference between images.
+    /// Compute the sum of the square pixel difference between images.
     ///
     /// This image surface must be of the same type as is used to render the image and should be
     /// of equal dimensions.
@@ -129,7 +129,8 @@ impl Simulator {
                     c1 >>= 8;
                     let v2 = c2 & 0xff;
                     c2 >>= 8;
-                    diff += (v1.max(v2) - v1.min(v2)) as f64;
+                    let delta = v1.max(v2) - v1.min(v2);
+                    diff += (delta * delta) as f64;
                 }
             }
         }
@@ -142,6 +143,8 @@ pub struct Optimizer {
     target: ImageSurface,
     sim: Simulator,
     population: Vec<Vec<f64>>,
+    mutation_chance: Binomial,
+    mutation_amount: Normal<f64>,
 }
 
 impl Optimizer {
@@ -176,6 +179,9 @@ impl Optimizer {
             target,
             sim,
             population,
+            // TODO: tweak
+            mutation_chance: Binomial::new(1, 0.2).unwrap(),
+            mutation_amount: Normal::new(0.0, 0.01).unwrap(),
         }
     }
 
@@ -229,9 +235,18 @@ impl Optimizer {
         // Check if indeed we generated a valid offspring.
         debug_assert_eq!(size, offspring.len());
 
-        // TODO: implement random mutations.
+        self.mutate(&mut offspring);
 
         offspring
+    }
+
+    fn mutate(&self, instance: &mut [f64]) {
+        let mut rng = rand::thread_rng();
+
+        instance
+            .iter_mut()
+            .filter(move |_| self.mutation_chance.sample(&mut rng) == 1)
+            .for_each(move |n| *n = (*n + self.mutation_amount.sample(&mut rng)).max(0.).min(1.));
     }
 }
 
@@ -289,9 +304,9 @@ mod tests {
         ctx.paint();
         drop(ctx);
 
-        // Difference should be (255 + 255) * 10 * 10
+        // Difference should be (255^2 + 255^2) * 10 * 10
         let difference = sim.compare(&mut reference);
-        assert_eq!(51000.0, difference);
+        assert_eq!(13005000., difference);
     }
 
     #[test]
