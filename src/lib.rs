@@ -1,10 +1,9 @@
-use std::convert::TryInto;
 use std::error::Error;
 use std::io::{Read, Write};
 
 use byte_slice_cast::AsSliceOf;
 use cairo::{Context, Format, ImageSurface};
-use rand::distributions::{Distribution, Standard};
+use rand_distr::{weighted::WeightedIndex, Distribution, Standard};
 
 pub struct Simulator {
     sides: usize,
@@ -180,7 +179,7 @@ impl Optimizer {
         }
     }
 
-    pub fn evaluate(&mut self) -> Vec<f64> {
+    fn evaluate(&mut self) -> Vec<f64> {
         // Manual borrows to ensure the checker approves of the lambda.
         let sim = &mut self.sim;
         let target = &mut self.target;
@@ -192,6 +191,47 @@ impl Optimizer {
                 sim.compare(target)
             })
             .collect()
+    }
+
+    pub fn advance(&mut self) {
+        let scores = self.evaluate();
+
+        let parent_distribution = WeightedIndex::new(scores.iter().map(|&s| 1. / s)).unwrap();
+        let pop_size = self.population.len();
+
+        let new_population = (0..pop_size)
+            .map(|_| self.generate_offspring(&parent_distribution))
+            .collect();
+
+        self.population = new_population;
+    }
+
+    fn generate_offspring(&self, parents: impl Distribution<usize>) -> Vec<f64> {
+        let mut rng = rand::thread_rng();
+
+        let parent1 = &self.population[parents.sample(&mut rng)];
+        let parent2 = &self.population[parents.sample(&mut rng)];
+
+        let size = parent1.len();
+
+        // Should be correct, but a serious bug if it isn't.
+        debug_assert_eq!(size, parent2.len());
+
+        // TODO: experiment with different crossover types.
+        // For now just split the genome in the middle.
+        let crossover_point = size / 2;
+
+        let mut offspring = Vec::with_capacity(size);
+
+        offspring.extend_from_slice(&parent1[..crossover_point]);
+        offspring.extend_from_slice(&parent2[crossover_point..]);
+
+        // Check if indeed we generated a valid offspring.
+        debug_assert_eq!(size, offspring.len());
+
+        // TODO: implement random mutations.
+
+        offspring
     }
 }
 
@@ -255,13 +295,13 @@ mod tests {
     }
 
     #[test]
-    fn initialize_optimizer() {
+    fn run_optimizer() {
         let mut optimizer = Optimizer::new(
             10,
             10,
             6,
             &mut include_bytes!("../samples/rustacean-small.png").as_ref(),
         );
-        optimizer.evaluate();
+        optimizer.advance();
     }
 }
