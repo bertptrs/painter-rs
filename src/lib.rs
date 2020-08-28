@@ -196,7 +196,7 @@ impl Optimizer {
             // TODO: tweak
             offspring_count: pop_size,
             mutation_chance: Binomial::new(1, 0.2).unwrap(),
-            mutation_amount: Normal::new(0.0, 0.01).unwrap(),
+            mutation_amount: Normal::new(0.0, 0.1).unwrap(),
         }
     }
 
@@ -271,6 +271,28 @@ impl Optimizer {
     /// function should be inverted.
     fn population_compare<T>(a: &(f64, T), b: &(f64, T)) -> Ordering {
         a.0.partial_cmp(&b.0).expect("Invalid fitness function")
+    }
+
+    pub fn draw_instance(
+        &mut self,
+        instance: usize,
+        to: &mut impl Write,
+    ) -> Result<(), Box<dyn Error>> {
+        let simulator = &mut self.sim;
+        let instance = &self.population[instance].1;
+
+        simulator.simulate(instance);
+        simulator.write_buffer(to)?;
+
+        Ok(())
+    }
+
+    pub fn score(&self, instance: usize) -> f64 {
+        self.population[instance].0
+    }
+
+    pub fn population_size(&self) -> usize {
+        self.population.len()
     }
 }
 
