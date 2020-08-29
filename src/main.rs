@@ -5,9 +5,13 @@ use structopt::StructOpt;
 
 use painter_rs::Optimizer;
 
+/// Simulate an evolutionary algorithm for generations.
+///
+/// For each generation, the best individual's score is printed and the individual is rendered to
+/// the `output-dir` folder.
 #[derive(StructOpt)]
 struct Options {
-    /// Input file
+    /// Input file. Must be 24-bit PNG without transparancy.
     #[structopt(parse(from_os_str))]
     input_file: PathBuf,
 
@@ -15,8 +19,30 @@ struct Options {
     #[structopt(parse(from_os_str))]
     output_dir: PathBuf,
 
+    /// Number of genrations to simulate for.
     #[structopt(short, long, default_value = "50")]
     generations: usize,
+
+    /// Number of individuals in the population.
+    #[structopt(short, long, default_value = "200")]
+    population: usize,
+
+    /// Ensure the best individuals survive the generational shift.
+    ///
+    /// If specified without argument, it will default to the population_size. Otherwise, specified
+    /// number of individuals will survive into the next generation.
+    #[structopt(short, long)]
+    elitism: Option<Option<usize>>,
+}
+
+impl Options {
+    pub fn elitism(&self) -> usize {
+        self.elitism
+            // Convert argument-less to population size
+            .map(|v| v.unwrap_or(self.population))
+            // Convert unspecified to 0
+            .unwrap_or(0)
+    }
 }
 
 fn main() {
@@ -24,7 +50,13 @@ fn main() {
 
     let mut input_file = File::open(&options.input_file).expect("Failed to read input file.");
 
-    let mut optimizer = Optimizer::new(200, 50, 6, &mut input_file);
+    let mut optimizer = Optimizer::new(
+        options.population,
+        50,
+        6,
+        options.elitism(),
+        &mut input_file,
+    );
 
     for n in 0..options.generations {
         optimizer.advance();

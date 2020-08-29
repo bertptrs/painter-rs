@@ -152,6 +152,7 @@ pub struct Optimizer {
     offspring_count: usize,
     mutation_chance: Binomial,
     mutation_amount: Normal<f64>,
+    elitism: usize,
 }
 
 impl Optimizer {
@@ -159,8 +160,13 @@ impl Optimizer {
         pop_size: usize,
         polygon_count: usize,
         sides: usize,
+        elitism: usize,
         target: &mut impl Read,
     ) -> Self {
+        assert!(
+            elitism <= pop_size,
+            "Cannot carry over more than entire population."
+        );
         // TODO: experiment with other initial distributions and RNG.
         let dist = Standard;
         let rng = rand::thread_rng();
@@ -197,6 +203,7 @@ impl Optimizer {
             offspring_count: pop_size,
             mutation_chance: Binomial::new(1, 0.2).unwrap(),
             mutation_amount: Normal::new(0.0, 0.1).unwrap(),
+            elitism,
         }
     }
 
@@ -215,6 +222,9 @@ impl Optimizer {
             })
             .collect();
 
+        // Remove entries that fall outside the current elitism
+        self.population.truncate(self.elitism);
+
         self.population.extend(new_generation);
 
         // Make sure the population is sorted again
@@ -222,9 +232,6 @@ impl Optimizer {
 
         // Finally, discard the unfit.
         self.population.truncate(pop_size);
-
-        // TODO: make elitism (always keeping the best regardless) optional and make the selection
-        // algorithm configurable.
     }
 
     fn generate_offspring(&self, parents: impl Distribution<usize>) -> Vec<f64> {
@@ -361,6 +368,7 @@ mod tests {
             10,
             10,
             6,
+            10,
             &mut include_bytes!("../samples/rustacean-small.png").as_ref(),
         );
         optimizer.advance();
