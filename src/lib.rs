@@ -271,8 +271,9 @@ impl Optimizer {
         let mut rng = rand::thread_rng();
 
         instance
-            .iter_mut()
+            .chunks_mut(self.sim.polygon_size())
             .filter(move |_| self.mutation_chance.sample(&mut rng) == 1)
+            .flatten()
             .for_each(move |n| *n = (*n + self.mutation_amount.sample(&mut rng)).max(0.).min(1.));
     }
 
