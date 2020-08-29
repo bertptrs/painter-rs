@@ -153,9 +153,14 @@ pub struct Optimizer {
     mutation_chance: Binomial,
     mutation_amount: Normal<f64>,
     elitism: usize,
+    // original dimensions, not the actual dimensions
+    width: usize,
+    height: usize,
 }
 
 impl Optimizer {
+    const SIMULATION_SIZE: usize = 128;
+
     pub fn new(
         pop_size: usize,
         polygon_count: usize,
@@ -172,12 +177,10 @@ impl Optimizer {
         let rng = rand::thread_rng();
 
         // TODO: better error handling.
-        let mut target = ImageSurface::create_from_png(target).expect("Failed to read PNG target.");
-        let mut sim = Simulator::new(
-            sides,
-            target.get_width() as usize,
-            target.get_height() as usize,
-        );
+        let target = ImageSurface::create_from_png(target).expect("Failed to read PNG target.");
+        let mut reference = Self::create_resized(&target).unwrap();
+
+        let mut sim = Simulator::new(sides, Self::SIMULATION_SIZE, Self::SIMULATION_SIZE);
 
         // Initialize random initial population
         let mut population: Vec<_> = (0..pop_size)
@@ -187,7 +190,7 @@ impl Optimizer {
                     .take(sim.polygon_size() * polygon_count)
                     .collect();
 
-                let fitness = sim.score(&dna, &mut target);
+                let fitness = sim.score(&dna, &mut reference);
 
                 (fitness, dna)
             })
@@ -196,7 +199,7 @@ impl Optimizer {
         population.sort_unstable_by(Self::population_compare);
 
         Self {
-            target,
+            target: reference,
             sim,
             population,
             // TODO: tweak
@@ -204,6 +207,8 @@ impl Optimizer {
             mutation_chance: Binomial::new(1, 0.2).unwrap(),
             mutation_amount: Normal::new(0.0, 0.1).unwrap(),
             elitism,
+            width: target.get_width() as usize,
+            height: target.get_height() as usize,
         }
     }
 
@@ -280,15 +285,10 @@ impl Optimizer {
         a.0.partial_cmp(&b.0).expect("Invalid fitness function")
     }
 
-    pub fn draw_instance(
-        &mut self,
-        instance: usize,
-        to: &mut impl Write,
-    ) -> Result<(), Box<dyn Error>> {
-        let simulator = &mut self.sim;
-        let instance = &self.population[instance].1;
+    pub fn render_png(&self, instance: usize, to: &mut impl Write) -> Result<(), Box<dyn Error>> {
+        let mut simulator = Simulator::new(self.sim.sides, self.width, self.height);
 
-        simulator.simulate(instance);
+        simulator.simulate(&self.population[instance].1);
         simulator.write_buffer(to)?;
 
         Ok(())
@@ -300,6 +300,32 @@ impl Optimizer {
 
     pub fn population_size(&self) -> usize {
         self.population.len()
+    }
+
+    fn create_resized(from: &ImageSurface) -> Result<ImageSurface, cairo::Error> {
+        let target = ImageSurface::create(
+            Simulator::IMAGE_FORMAT,
+            Self::SIMULATION_SIZE as i32,
+            Self::SIMULATION_SIZE as i32,
+        )?;
+
+        let ctx = Context::new(&target);
+
+        // Paint white background in case the target image has transparancy
+        ctx.set_source_rgb(1., 1., 1.);
+        ctx.paint();
+
+        // Set proper scaling
+        ctx.scale(
+            Self::SIMULATION_SIZE as f64 / (from.get_width() as f64),
+            Self::SIMULATION_SIZE as f64 / (from.get_height() as f64),
+        );
+
+        // Re-scale the source image to the desired dimensions.
+        ctx.set_source_surface(from, 0., 0.);
+        ctx.paint();
+
+        Ok(target)
     }
 }
 
@@ -369,7 +395,7 @@ mod tests {
             10,
             6,
             10,
-            &mut include_bytes!("../samples/rustacean-small.png").as_ref(),
+            &mut include_bytes!("../samples/rustacean.png").as_ref(),
         );
         optimizer.advance();
     }

@@ -67,7 +67,7 @@ fn main() {
         let mut target = File::create(target).expect("Failed to open output file");
 
         optimizer
-            .draw_instance(0, &mut target)
+            .render_png(0, &mut target)
             .expect("Failed to write output file");
     }
 }
