@@ -33,6 +33,14 @@ struct Options {
     /// number of individuals will survive into the next generation.
     #[structopt(short, long)]
     elitism: Option<Option<usize>>,
+
+    /// Number of sides per drawn polygon.
+    #[structopt(short, long, default_value = "6")]
+    polygon_sides: usize,
+
+    /// Number of polygons to use.
+    #[structopt(short, long, default_value = "100")]
+    polygon_count: usize,
 }
 
 impl Options {
@@ -52,8 +60,8 @@ fn main() {
 
     let mut optimizer = Optimizer::new(
         options.population,
-        50,
-        6,
+        options.polygon_count,
+        options.polygon_sides,
         options.elitism(),
         &mut input_file,
     );
